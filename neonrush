@@ -1,0 +1,473 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Neon Rush — Prototype</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.55.2/dist/phaser.min.js"></script>
+  <style>
+    html,body { height:100%; margin:0; background:#050510; font-family: Arial, Helvetica, sans-serif; -webkit-tap-highlight-color: transparent; }
+    #game-container { width:100%; height:100%; }
+    .note { position: absolute; left:8px; bottom:8px; color:#9aa; font-size:12px; }
+  </style>
+</head>
+<body>
+<div id="game-container"></div>
+<div class="note">Tip: Click/tap or press SPACE to jump. Double-tap to dash. M to mute.</div>
+<script>
+/* Neon Rush — Phaser3 single-file prototype
+   Features:
+   - auto-runner, jump/double-jump/dash
+   - collectibles, power-ups, shop upgrades
+   - local leaderboard via localStorage
+   - placeholder hooks for CrazyGames SDK (commented)
+*/
+
+/* CONFIG */
+const GAME_WIDTH = 960, GAME_HEIGHT = 540;
+
+/* Utility */
+function clamp(v,a,b){ return Math.max(a, Math.min(b, v)); }
+
+/* --- Game Scenes --- */
+class BootScene extends Phaser.Scene {
+  constructor(){ super({key:'BootScene'}); }
+  preload(){
+    // small inline SVG images as data URLs to keep prototype tiny
+    this.load.image('bg_grad','data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="960" height="540"><defs><linearGradient id="g" x1="0" x2="1" y1="0" y2="1"><stop offset="0" stop-color="%23050b1a"/><stop offset="1" stop-color="%23031b2b"/></linearGradient></defs><rect width="100%" height="100%" fill="url(%23g)"/></svg>');
+    this.load.image('orb','data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="120" height="120"><defs><radialGradient id="g"><stop offset="0" stop-color="%23fff"/><stop offset="1" stop-color="%23ff2f9c"/></radialGradient></defs><circle cx="60" cy="60" r="52" fill="url(%23g)"/></svg>');
+    this.load.image('orb_small','data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28"><circle cx="14" cy="14" r="12" fill="%23fff700"/></svg>');
+    this.load.image('block','data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="120"><rect width="100%" height="100%" rx="8" ry="8" fill="%23111b3a"/></svg>');
+    this.load.image('shield_fx','data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96"><circle cx="48" cy="48" r="44" fill="none" stroke="%2390f" stroke-width="8" /></svg>');
+    this.load.image('magnet_fx','data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><rect width="64" height="64" rx="8" fill="%2366f"/></svg>');
+    // load fonts (web-safe default used)
+  }
+  create(){
+    this.scene.start('MenuScene');
+  }
+}
+
+class MenuScene extends Phaser.Scene {
+  constructor(){ super({key:'MenuScene'}); }
+  create(){
+    this.add.image(0,0,'bg_grad').setOrigin(0).setDisplaySize(GAME_WIDTH,GAME_HEIGHT);
+    this.add.text(GAME_WIDTH/2,80,'NEON RUSH',{font:'48px Verdana', fill:'#fff'}).setOrigin(0.5).setShadow(0,6,'#000',8);
+    this.add.text(GAME_WIDTH/2,140,'Arcade runner — short fast runs',{font:'18px Arial', fill:'#bfe'}).setOrigin(0.5);
+    // best score
+    const best = localStorage.getItem('neon_best')||0;
+    this.add.text(24,24,'Best: '+best,{font:'18px Arial', fill:'#9ef'});
+    // buttons
+    const btnStyle = { font:'24px Arial', fill:'#050510', backgroundColor:'#9ef', padding: {x:16,y:8} };
+    const play = this.add.text(GAME_WIDTH/2,220,'PLAY',btnStyle).setOrigin(0.5).setInteractive();
+    play.on('pointerdown', ()=> {
+      this.scene.start('GameScene', { fromMenu:true });
+    });
+    const shopBtn = this.add.text(GAME_WIDTH/2,280,'SHOP',btnStyle).setOrigin(0.5).setInteractive();
+    shopBtn.on('pointerdown', ()=> this.scene.start('ShopScene'));
+    const how = this.add.text(GAME_WIDTH/2,340,'HOW TO PLAY', { font:'18px Arial', fill:'#cfe' }).setOrigin(0.5);
+    this.add.text(GAME_WIDTH/2,380,'Click/tap or SPACE to jump. Double-tap/two clicks to dash.', { font:'14px Arial', fill:'#9df' }).setOrigin(0.5);
+    // credits
+    this.add.text(12,GAME_HEIGHT-22,'Prototype — built for CrazyGames submission', { font:'12px Arial', fill:'#6ff' });
+
+    // small leaderboard preview
+    const lb = JSON.parse(localStorage.getItem('neon_leaderboard')||'[]');
+    this.add.text(GAME_WIDTH-220,24,'Local Top Scores',{font:'16px Arial', fill:'#9ef'});
+    for(let i=0;i<Math.min(5, lb.length); i++){
+      this.add.text(GAME_WIDTH-220,52 + i*24, `${i+1}. ${lb[i].name||'Player'} - ${lb[i].score}`, { font:'14px Arial', fill:'#9df' });
+    }
+  }
+}
+
+class ShopScene extends Phaser.Scene {
+  constructor(){ super({key:'ShopScene'}); }
+  create(){
+    this.add.image(0,0,'bg_grad').setOrigin(0).setDisplaySize(GAME_WIDTH,GAME_HEIGHT);
+    this.add.text(GAME_WIDTH/2,60,'SHOP & UPGRADES',{font:'28px Arial', fill:'#fff'}).setOrigin(0.5);
+    this.playerOrbs = parseInt(localStorage.getItem('neon_orbs')||'0',10);
+    this.orbText = this.add.text(24,24,'Orbs: '+this.playerOrbs,{font:'18px Arial',fill:'#9ef'});
+
+    // shop items - example
+    this.items = [
+      { id:'start_life', title:'Start with +1 Life', cost:50, desc:'Begin runs with one extra continue.' },
+      { id:'more_orb', title:'+10% Orb Gain', cost:100, desc:'Permanent +10% orb drop rate.' },
+      { id:'skin_neon', title:'Neon Skin', cost:40, desc:'Cosmetic skin for orb.' }
+    ];
+    let y = 120;
+    this.items.forEach(it=>{
+      const bg = this.add.rectangle(80,y,820,80,0x08102a,0.6).setOrigin(0);
+      this.add.text(100,y+12,it.title,{font:'20px Arial', fill:'#9ef'});
+      this.add.text(100,y+38,it.desc,{font:'14px Arial', fill:'#8df'});
+      const buy = this.add.text(840,y+24,'BUY', {font:'18px Arial', fill:'#050510', backgroundColor:'#9ef', padding:{x:10,y:6}}).setOrigin(1,0.5)
+        .setInteractive();
+      buy.on('pointerdown', ()=> {
+        const owned = localStorage.getItem('neon_owned_'+it.id);
+        if(owned){ this.showTemp('Already owned'); return; }
+        if(this.playerOrbs >= it.cost){
+          this.playerOrbs -= it.cost;
+          localStorage.setItem('neon_orbs', this.playerOrbs);
+          localStorage.setItem('neon_owned_'+it.id, '1');
+          this.orbText.setText('Orbs: '+this.playerOrbs);
+          this.showTemp('Purchased: '+it.title);
+        } else {
+          this.showTemp('Not enough orbs');
+        }
+      });
+      y += 100;
+    });
+    const back = this.add.text(GAME_WIDTH/2, GAME_HEIGHT-60, 'BACK', {font:'20px Arial', fill:'#050510', backgroundColor:'#9ef', padding:{x:12,y:8}}).setOrigin(0.5).setInteractive();
+    back.on('pointerdown', ()=> this.scene.start('MenuScene'));
+  }
+  showTemp(msg){
+    if(this._temp) this._temp.destroy();
+    this._temp = this.add.text(GAME_WIDTH/2, GAME_HEIGHT-120, msg, {font:'18px Arial', fill:'#fff', backgroundColor:'#0008'}).setOrigin(0.5);
+    this.time.delayedCall(1300, ()=> this._temp.destroy());
+  }
+}
+
+class GameScene extends Phaser.Scene {
+  constructor(){ super({key:'GameScene'}); }
+  init(data){ this.startFromMenu = data.fromMenu; }
+  create(){
+    // background
+    this.add.image(0,0,'bg_grad').setOrigin(0).setDisplaySize(GAME_WIDTH,GAME_HEIGHT);
+    // HUD
+    this.score = 0; this.combo = 0; this.comboTimer = 0;
+    this.best = parseInt(localStorage.getItem('neon_best')||'0',10);
+    this.orbBank = parseInt(localStorage.getItem('neon_orbs')||'0',10);
+    this.add.text(12,12,'Score',{font:'12px Arial',fill:'#9af'});
+    this.scoreText = this.add.text(12,28,'0',{font:'20px Arial',fill:'#fff'});
+    this.add.text(820,12,'Orbs',{font:'12px Arial',fill:'#9af'});
+    this.orbBankText = this.add.text(820,28,this.orbBank,{font:'20px Arial',fill:'#fff'});
+    this.bestText = this.add.text(12,520,'Best: '+this.best,{font:'14px Arial',fill:'#9df'});
+    // player
+    this.physics.world.setBounds(0,0,GAME_WIDTH, GAME_HEIGHT);
+    this.player = this.physics.add.sprite(160, GAME_HEIGHT/2, 'orb').setCircle(52).setDepth(5);
+    this.player.setCollideWorldBounds(true);
+    this.player.setBounce(0);
+    this.player.body.setGravityY(900);
+    // fx containers
+    this.shieldFX = this.add.image(this.player.x, this.player.y,'shield_fx').setVisible(false).setDepth(4);
+    this.magnetFX = this.add.image(this.player.x, this.player.y,'magnet_fx').setVisible(false).setDepth(4);
+    // groups
+    this.blocks = this.physics.add.group({ immovable:true, allowGravity:false });
+    this.collectibles = this.physics.add.group();
+    // collisions
+    this.physics.add.collider(this.player, this.blocks, ()=> this.onHit(), null, this);
+    this.physics.add.overlap(this.player, this.collectibles, (p,c)=> this.collectOrb(p,c), null, this);
+
+    // controls
+    this.input.on('pointerdown', ()=> this.onInput());
+    this.input.keyboard.on('keydown-SPACE', ()=> this.onInput());
+    this.input.on('pointerup', ()=> this._lastTap = null );
+    this.input.keyboard.on('keydown-D', ()=> this.dash());
+
+    // mute toggle
+    this.input.keyboard.on('keydown-M', ()=> { this.sound.mute = !this.sound.mute; });
+
+    // game params
+    this.gameOver = false;
+    this.speed = 240; this.maxSpeed = 700;
+    this.spawnTimer = 0;
+    this.collectTimer = 0;
+
+    // power-up state
+    this.hasShield = false;
+    this.hasMagnet = false;
+    this.hasSlow = false;
+
+    // upgrades/purchased effects
+    this.ownedStartLife = !!localStorage.getItem('neon_owned_start_life');
+    this.orbGainMult = localStorage.getItem('neon_owned_more_orb') ? 1.10 : 1.0;
+
+    // start countdown if from menu
+    if(this.startFromMenu){
+      this.countdownText = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2, '3', {font:'72px Arial', fill:'#fff'}).setOrigin(0.5);
+      this.time.delayedCall(600, ()=> this.countdownText.setText('2'));
+      this.time.delayedCall(1200, ()=> this.countdownText.setText('1'));
+      this.time.delayedCall(1800, ()=> { this.countdownText.destroy(); });
+    }
+
+    // spawn initial floor blocks
+    for(let i=0;i<6;i++) this.spawnBlock(GAME_WIDTH + i*200, GAME_HEIGHT - 90);
+
+    // overlap cleaning zone
+    this.time.addEvent({ delay: 3000, loop:true, callback: ()=> this.cleanupOffscreen() });
+
+    // pause key
+    this.input.keyboard.on('keydown-ESC', ()=> this.scene.pause());
+    // placeholder sounds
+    this.sfx = {
+      collect: null,
+      hit: null,
+      jump: null,
+    };
+
+    // game over UI container
+    this.gameOverContainer = this.add.container(0,0).setVisible(false);
+
+    // show instructions small
+    this.hint = this.add.text(520, 18, 'Double-jump or double-tap to dash', { font:'14px Arial', fill:'#9df' });
+  }
+
+  onInput(){
+    if(this.gameOver) return;
+    // double-tap detection for dash
+    const now = this.time.now;
+    if(this._lastTap && (now - this._lastTap) < 280){
+      this.dash();
+      this._lastTap = null;
+      return;
+    }
+    this._lastTap = now;
+    // normal jump
+    if(this.player.body.touching.down){
+      this.player.setVelocityY(-480);
+      this._canDoubleJump = true;
+    } else if(this._canDoubleJump){
+      // second press => double jump
+      this.player.setVelocityY(-420);
+      this._canDoubleJump = false;
+      // allow a small window to dash after double-jump if player taps quickly
+    }
+  }
+
+  dash(){
+    if(this.gameOver) return;
+    // implement a forward dash: quick burst to the right + invulnerable small time
+    if(this._dashing) return;
+    this._dashing = true;
+    const prevGravity = this.player.body.gravity.y;
+    this.player.body.setGravityY(0);
+    this.player.setVelocityX(380);
+    this.time.delayedCall(180, ()=> {
+      this.player.setVelocityX(0);
+      this.player.body.setGravityY(prevGravity || 900);
+      this._dashing = false;
+    });
+  }
+
+  spawnBlock(x,y){
+    const b = this.blocks.create(x,y,'block');
+    b.setImmovable(true);
+    b.body.setAllowGravity(false);
+    b.setVelocityX(-this.speed);
+    return b;
+  }
+
+  spawnObstacle(){
+    // place some blocks at varying vertical positions to create gaps
+    const gapY = Phaser.Math.Between(120, GAME_HEIGHT - 160);
+    this.spawnBlock(GAME_WIDTH + 60, gapY);
+    // maybe spawn ceiling obstacle sometimes
+    if(Math.random() < 0.35) this.spawnBlock(GAME_WIDTH + 60, gapY - 160);
+  }
+
+  spawnCollectible(){
+    const y = Phaser.Math.Between(120, GAME_HEIGHT - 160);
+    const c = this.collectibles.create(GAME_WIDTH + 40, y, 'orb_small');
+    c.body.setAllowGravity(false);
+    c.setVelocityX(-this.speed);
+    c.setData('value', 10);
+    // small chance to spawn a power-up block (we'll mark by data)
+    if(Math.random() < 0.06){
+      c.setData('power','shield');
+      c.setTexture('shield_fx');
+    } else if(Math.random() < 0.04){
+      c.setData('power','magnet');
+      c.setTexture('magnet_fx');
+    } else if(Math.random() < 0.03){
+      c.setData('power','slow');
+      c.setTint(0x8ff);
+    }
+  }
+
+  collectOrb(player, orb){
+    if(!orb.active) return;
+    const p = orb.getData('power');
+    if(p){
+      this.applyPowerUp(p);
+      orb.destroy();
+      return;
+    }
+    orb.destroy();
+    // orb collection reward — scale with orbGainMult
+    const val = Math.round((orb.getData('value')||10) * this.orbGainMult);
+    this.orbBank += val;
+    this.orbBankText.setText(this.orbBank);
+    localStorage.setItem('neon_orbs', this.orbBank);
+    // score + combo
+    const now = this.time.now;
+    if(this.comboTimer && (now - this.comboTimer) < 1500){
+      this.combo++;
+      this.score += 10 + Math.floor(this.combo * 2);
+    } else {
+      this.combo = 1; this.score += 10;
+    }
+    this.comboTimer = now;
+    this.scoreText.setText(this.score);
+    // small magnet behavior: if hasMagnet, collect nearby automatically (handled in update)
+  }
+
+  applyPowerUp(power){
+    if(power === 'shield'){
+      this.hasShield = true;
+      this.shieldFX.setVisible(true);
+      this.time.delayedCall(2500, ()=> { this.hasShield = false; this.shieldFX.setVisible(false); });
+    } else if(power === 'magnet'){
+      this.hasMagnet = true;
+      this.magnetFX.setVisible(true);
+      this.time.delayedCall(3000, ()=> { this.hasMagnet = false; this.magnetFX.setVisible(false); });
+    } else if(power === 'slow'){
+      if(this.hasSlow) return;
+      this.hasSlow = true;
+      this.speed *= 0.6;
+      this.time.delayedCall(2200, ()=> { this.speed /= 0.6; this.hasSlow = false; });
+    }
+  }
+
+  onHit(){
+    if(this.hasShield || this._dashing){
+      // ignore hit
+      return;
+    }
+    // game over
+    this.endRun();
+  }
+
+  endRun(){
+    if(this.gameOver) return;
+    this.gameOver = true;
+    // stop motion
+    this.blocks.setVelocityX(0);
+    this.collectibles.setVelocityX(0);
+    this.player.setTint(0xff4444);
+    // show game over UI
+    this.showGameOver();
+  }
+
+  showGameOver(){
+    // store best
+    if(this.score > this.best){
+      this.best = this.score;
+      localStorage.setItem('neon_best', this.best);
+    }
+    // push to leaderboard
+    const lb = JSON.parse(localStorage.getItem('neon_leaderboard')||'[]');
+    lb.push({ name: 'You', score: this.score, ts: Date.now() });
+    lb.sort((a,b)=>b.score-a.score);
+    localStorage.setItem('neon_leaderboard', JSON.stringify(lb.slice(0,20)));
+
+    // game over overlay
+    const w = 520, h = 260;
+    const x = (GAME_WIDTH - w)/2, y = (GAME_HEIGHT - h)/2;
+    const panel = this.add.rectangle(GAME_WIDTH/2, GAME_HEIGHT/2, w, h, 0x05102a, 0.95).setStrokeStyle(2, 0x9ef).setDepth(20);
+    const t = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 - 68, 'GAME OVER', { font:'36px Arial', fill:'#fff' }).setOrigin(0.5).setDepth(21);
+    const s = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 - 20, `Score: ${this.score}`, { font:'20px Arial', fill:'#9df' }).setOrigin(0.5).setDepth(21);
+    const best = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 + 8, `Best: ${this.best}`, { font:'16px Arial', fill:'#9df' }).setOrigin(0.5).setDepth(21);
+    const orbsGain = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 + 36, `Orbs +${Math.round(this.orbBank - (parseInt(localStorage.getItem('neon_orbs')||0)) )}`, { font:'14px Arial', fill:'#9df' }).setOrigin(0.5).setDepth(21);
+    const retry = this.add.text(GAME_WIDTH/2 - 70, GAME_HEIGHT/2 + 82, 'RETRY', { font:'18px Arial', fill:'#050510', backgroundColor:'#9ef', padding:{x:14,y:8} }).setOrigin(0.5).setDepth(21).setInteractive();
+    retry.on('pointerdown', ()=> {
+      panel.destroy(); t.destroy(); s.destroy(); best.destroy(); retry.destroy(); leaderboardBtn.destroy(); menuBtn.destroy();
+      this.scene.restart();
+    });
+    const leaderboardBtn = this.add.text(GAME_WIDTH/2 + 70, GAME_HEIGHT/2 + 82, 'LEADERBOARD', { font:'18px Arial', fill:'#050510', backgroundColor:'#9ef', padding:{x:10,y:8} }).setOrigin(0.5).setDepth(21).setInteractive();
+    leaderboardBtn.on('pointerdown', ()=> {
+      // simple local leaderboard modal
+      const lb = JSON.parse(localStorage.getItem('neon_leaderboard')||'[]');
+      let txt = 'Top Scores\n\n';
+      for(let i=0;i<Math.min(7,lb.length);i++) txt += `${i+1}. ${lb[i].name} — ${lb[i].score}\n`;
+      alert(txt);
+    });
+    const menuBtn = this.add.text(GAME_WIDTH/2, GAME_HEIGHT/2 + 118, 'MENU', { font:'16px Arial', fill:'#fff', backgroundColor:'#333', padding:{x:10,y:6} }).setOrigin(0.5).setDepth(21).setInteractive();
+    menuBtn.on('pointerdown', ()=> this.scene.start('MenuScene'));
+  }
+
+  cleanupOffscreen(){
+    this.blocks.children.iterate(c=> { if(c && c.x < -200) c.destroy(); });
+    this.collectibles.children.iterate(c=> { if(c && c.x < -120) c.destroy(); });
+  }
+
+  update(time, dt){
+    if(this.gameOver) return;
+    // move blocks & collectibles by current speed
+    this.blocks.setVelocityX(-this.speed);
+    this.collectibles.setVelocityX(-this.speed);
+
+    // spawn logic
+    this.spawnTimer += dt;
+    if(this.spawnTimer > Math.max(400, 1100 - (this.speed/2))){
+      this.spawnTimer = 0;
+      if(Math.random() < 0.8) this.spawnBlock(GAME_WIDTH + 100, GAME_HEIGHT - 90);
+      if(Math.random() < 0.6) this.spawnObstacle();
+    }
+    this.collectTimer += dt;
+    if(this.collectTimer > 900){
+      this.collectTimer = 0;
+      this.spawnCollectible();
+    }
+
+    // slowly increase difficulty
+    this.speed = clamp(this.speed + dt*0.01, 240, this.maxSpeed);
+
+    // UI updates
+    this.score += Math.floor(dt * 0.02); // small passive score by distance
+    this.scoreText.setText(this.score);
+
+    // shield/magnet fx follow player
+    if(this.shieldFX.visible){ this.shieldFX.setPosition(this.player.x, this.player.y); }
+    if(this.magnetFX.visible){ this.magnetFX.setPosition(this.player.x, this.player.y); }
+
+    // magnet auto-collect
+    if(this.hasMagnet){
+      this.collectibles.children.iterate(c=>{
+        if(!c.active) return;
+        const dist = Phaser.Math.Distance.Between(this.player.x, this.player.y, c.x, c.y);
+        if(dist < 160){ this.physics.moveToObject(c, this.player, 300); }
+      });
+    }
+
+    // simple bounce ground check
+    if(this.player.y > GAME_HEIGHT - 64) {
+      this.player.y = GAME_HEIGHT - 64;
+      this.player.setVelocityY(0);
+    }
+  }
+}
+
+/* Phaser config */
+const config = {
+  type: Phaser.AUTO,
+  parent: 'game-container',
+  width: GAME_WIDTH,
+  height: GAME_HEIGHT,
+  backgroundColor: '#050510',
+  physics: {
+    default: 'arcade',
+    arcade: { gravity: { y: 0 }, debug: false }
+  },
+  scene: [ BootScene, MenuScene, ShopScene, GameScene ],
+  scale: {
+    mode: Phaser.Scale.FIT,
+    autoCenter: Phaser.Scale.CENTER_BOTH
+  }
+};
+
+const game = new Phaser.Game(config);
+
+/* CRAZY GAMES SDK PLACEHOLDER (uncomment & integrate SDK as instructed by CrazyGames)
+window.addEventListener('load', async () => {
+  if(window.CrazyGames && window.CrazyGames.SDK){
+    try {
+      await window.CrazyGames.SDK.init();
+      console.log('CrazyGames SDK initialized');
+      // hook rewarded ads: window.CrazyGames.SDK.showRewardedVideo()
+    } catch(e){
+      console.warn('CrazyGames SDK failed', e);
+    }
+  }
+});
+*/
+
+</script>
+</body>
+</html>
